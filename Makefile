@@ -12,8 +12,7 @@ clean:
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp -f psvstat $(DESTDIR)$(PREFIX)/bin
-	chmod 755 $(DESTDIR)$(PREFIX)/bin/stw
-	mkdir -p $(DESTDIR)$(PREFIX)/man/man1
+	mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
 	sed "s/VERSION/$(VERSION)/g" < psvstat.1 > $(DESTDIR)$(PREFIX)/share/man/man1/psvstat.1
 	chmod 644 $(DESTDIR)$(PREFIX)/share/man/man1/psvstat.1
 
