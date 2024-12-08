@@ -1,3 +1,7 @@
+#include "arg.h"
+
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
@@ -7,7 +11,10 @@
 #include <time.h>
 #include <unistd.h>
 
-struct service_serial {
+#define MAXSERVICES 100
+
+
+struct serviceserial {
 	uint8_t status_change[8];
 	uint8_t status_change_ms[4];
 	uint8_t pid[4];
@@ -17,62 +24,100 @@ struct service_serial {
 	uint8_t state;
 };
 
-void printstatus(const char* path, struct service_serial* buffer) {
+struct serviceinfo {
+	char*                name;
+	int                  isuser;
+	struct serviceserial serial;
+};
+
+
+static const char*        home = NULL;
+static struct serviceinfo services[MAXSERVICES];
+static int                nservices = 0;
+static int                sortuser = 0, sortsys = 0;
+
+static int getservice(struct serviceinfo* info, const char* service) {
+	char        path[PATH_MAX];
+	FILE*       fp;
 	const char* name;
-	if ((name = strrchr(path, '/'))) {
+
+	/* read status */
+	snprintf(path, sizeof path, "%s/supervise/status", service);
+	if (!(fp = fopen(path, "r"))) {
+		if (errno != ENOENT && errno != EISDIR)
+			fprintf(stderr, "%s: unable to open status-file: %s\n", service, strerror(errno));
+		return -1;
+	}
+	if (fread(&info->serial, sizeof(info->serial), 1, fp) != 1) {
+		fprintf(stderr, "%s: unable to read status-file: %s\n", service, strerror(ferror(fp)));
+		return -1;
+	}
+	fclose(fp);
+
+	/* isuser */
+	if (!realpath(service, path)) {
+		fprintf(stderr, "%s: unable to get absolute path of: %s\n", service, strerror(errno));
+		return -1;
+	}
+
+	info->isuser = home != NULL && !strncmp(path, home, strlen(home));
+
+	if ((name = strrchr(service, '/'))) {
 		if (!strcmp(name, "/log")) {
-			while (--name > path) {
+			while (--name > service) {
 				if (*name == '/')
 					break;
 			}
-			name++;
-		} else {
-			name++;
 		}
+		name++;
 	} else
-		name = path;
+		name = service;
 
-	char* home   = getenv("HOME");
-	int   isuser = home != NULL && strncmp(home, path, strlen(home)) == 0;
+	info->name = strdup(name);
+	return 0;
+}
 
-	if (isuser) {
+static void printstatus(struct serviceinfo* service) {
+	if (service->isuser)
 		printf("user  ");
-	} else {
+	else
 		printf("sys   ");
-	}
 
-	printf("%-20s ", name);
+	printf("%-20s ", service->name);
 
 	// wants up and is up
 	// wants down and is down
-	if ((buffer->wantsup == 'd') == (buffer->state == 0))
+	if ((service->serial.wantsup == 'd') == (service->serial.state == 0))
 		printf("= ");
 	// wants down and is up
-	else if (buffer->wantsup == 'd')
+	else if (service->serial.wantsup == 'd')
 		printf("v ");
 	// wants up and is down
-	else if (buffer->state == 0)
+	else if (service->serial.state == 0)
 		printf("^ ");
 
-	if (buffer->paused)
-		printf("paus  ");
-	else if (buffer->state == 0)
+	if (service->serial.state == 0)
 		printf("down  ");
-	else if (buffer->state == 1)
+	else if (service->serial.state == 1)
 		printf("run   ");
-	else if (buffer->state == 2)
+	else if (service->serial.state == 2)
 		printf("fin   ");
 	else
 		printf("???   ");
 
-	uint64_t tai = ((uint64_t) buffer->status_change[0] << 56) |
-	               ((uint64_t) buffer->status_change[1] << 48) |
-	               ((uint64_t) buffer->status_change[2] << 40) |
-	               ((uint64_t) buffer->status_change[3] << 32) |
-	               ((uint64_t) buffer->status_change[4] << 24) |
-	               ((uint64_t) buffer->status_change[5] << 16) |
-	               ((uint64_t) buffer->status_change[6] << 8) |
-	               ((uint64_t) buffer->status_change[7] << 0);
+	if (service->serial.paused)
+		printf("paus ");
+	else
+		printf("     ");
+
+	uint64_t tai = ((uint64_t) service->serial.status_change[0] << 56) |
+	               ((uint64_t) service->serial.status_change[1] << 48) |
+	               ((uint64_t) service->serial.status_change[2] << 40) |
+	               ((uint64_t) service->serial.status_change[3] << 32) |
+	               ((uint64_t) service->serial.status_change[4] << 24) |
+	               ((uint64_t) service->serial.status_change[5] << 16) |
+	               ((uint64_t) service->serial.status_change[6] << 8) |
+	               ((uint64_t) service->serial.status_change[7] << 0);
 
 	time_t      timediff  = time(NULL) - tai + 4611686018427387914ULL;
 	const char* timediffu = timediff == 1 ? "second" : "seconds";
@@ -93,11 +138,11 @@ void printstatus(const char* path, struct service_serial* buffer) {
 
 	printf("%-11s ", timediffstr);
 
-	if (buffer->state == 1) {
-		pid_t pid = (buffer->pid[0] << 0) |
-		            (buffer->pid[1] << 8) |
-		            (buffer->pid[2] << 16) |
-		            (buffer->pid[3] << 24);
+	if (service->serial.state == 1) {
+		pid_t pid = (service->serial.pid[0] << 0) |
+		            (service->serial.pid[1] << 8) |
+		            (service->serial.pid[2] << 16) |
+		            (service->serial.pid[3] << 24);
 
 		printf("%-5d  ", pid);
 
@@ -127,25 +172,82 @@ void printstatus(const char* path, struct service_serial* buffer) {
 	printf("\n");
 }
 
+static int scanservices(const char* directory) {
+	char           path[PATH_MAX];
+	DIR*           dp;
+	struct dirent* ep;
+
+	if (!getservice(&services[nservices], directory))
+		nservices++;
+
+	if (!(dp = opendir(directory))) {
+		fprintf(stderr, "%s: unable to open directory: %s\n", directory, strerror(errno));
+		return -1;
+	}
+
+	while ((ep = readdir(dp))) {
+		if (ep->d_name[0] == '.')
+			continue;
+
+		snprintf(path, sizeof(path), "%s/%s", directory, ep->d_name);
+		if (!getservice(&services[nservices], path))
+			nservices++;
+	}
+
+	closedir(dp);
+	return 0;
+}
+
+static int servicecmp(const void* pleft, const void* pright) {
+	const struct serviceinfo* left  = pleft;
+	const struct serviceinfo* right = pright;
+
+	if ((sortuser || sortsys) && left->isuser != right->isuser)
+		return sortsys
+		         ? left->isuser - right->isuser
+		         : right->isuser - left->isuser;
+
+	return strcmp(left->name, right->name);
+}
+
+static __attribute__((noreturn)) void usage(int exitcode) {
+	fprintf(stderr, "usage: psvstat [-hsu] [-H home] [directories...]\n");
+
+	exit(exitcode);
+}
+
 int main(int argc, char** argv) {
 	char  path[PATH_MAX];
-	int   fd;
-	char* basename;
+	FILE* fp;
 
-	struct service_serial statusbuf;
-
-	for (int i = 1; i < argc; i++) {
-		snprintf(path, sizeof path, "%s/supervise/status", argv[i]);
-		if ((fd = open(path, O_RDONLY)) == -1) {
-			fprintf(stderr, "%s: unable to open supervise/status\n", argv[i]);
-			continue;
-		}
-		if (read(fd, &statusbuf, sizeof statusbuf) != sizeof statusbuf) {
-			fprintf(stderr, "%s: unable to read status\n", argv[i]);
-			continue;
-		}
-		close(fd);
-
-		printstatus(argv[i], &statusbuf);
+	ARGBEGIN
+	switch (OPT) {
+		case 'h':
+			usage(0);
+			break;
+		case 'H':
+			home = EARGF(usage(1));
+			break;
+		case 's':
+			sortsys = 1;
+			break;
+		case 'u':
+			sortuser = 1;
+			break;
 	}
+	ARGEND
+
+	if (!home)
+		home = getenv("HOME"); /* fill global variable */
+
+	for (int i = 0; i < argc; i++)
+		scanservices(argv[i]);
+
+	qsort(services, nservices, sizeof(*services), servicecmp);
+
+	for (int i = 0; i < nservices; i++)
+		printstatus(&services[i]);
+
+	for (int i = 0; i < nservices; i++)
+		free(services[i].name);
 }
