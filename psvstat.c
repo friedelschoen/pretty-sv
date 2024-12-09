@@ -237,6 +237,11 @@ int main(int argc, char** argv) {
 	}
 	ARGEND
 
+	if (sortsys && sortuser) {
+		fprintf(stderr, "error: you cannot specify -s and -u\n");
+		return 1;
+	}
+
 	if (!home)
 		home = getenv("HOME"); /* fill global variable */
 
