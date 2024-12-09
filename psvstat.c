@@ -34,7 +34,7 @@ struct serviceinfo {
 static const char*        home = NULL;
 static struct serviceinfo services[MAXSERVICES];
 static int                nservices = 0;
-static int                sortuser = 0, sortsys = 0;
+static int                sortuser = 0, sortsys = 0, scanlog = 0;
 
 static int getservice(struct serviceinfo* info, const char* service) {
 	char        path[PATH_MAX];
@@ -172,16 +172,22 @@ static void printstatus(struct serviceinfo* service) {
 	printf("\n");
 }
 
-static int scanservices(const char* directory) {
+static int scanservices(const char* base) {
 	char           path[PATH_MAX];
 	DIR*           dp;
 	struct dirent* ep;
 
-	if (!getservice(&services[nservices], directory))
+	if (!getservice(&services[nservices], base))
 		nservices++;
 
-	if (!(dp = opendir(directory))) {
-		fprintf(stderr, "%s: unable to open directory: %s\n", directory, strerror(errno));
+	if (scanlog) {
+		snprintf(path, sizeof(path), "%s/log", base);
+		if (!getservice(&services[nservices], path))
+			nservices++;
+	}
+
+	if (!(dp = opendir(base))) {
+		fprintf(stderr, "%s: unable to open directory: %s\n", base, strerror(errno));
 		return -1;
 	}
 
@@ -189,9 +195,15 @@ static int scanservices(const char* directory) {
 		if (ep->d_name[0] == '.')
 			continue;
 
-		snprintf(path, sizeof(path), "%s/%s", directory, ep->d_name);
+		snprintf(path, sizeof(path), "%s/%s", base, ep->d_name);
 		if (!getservice(&services[nservices], path))
 			nservices++;
+
+		if (scanlog) {
+			snprintf(path, sizeof(path), "%s/%s/log", base, ep->d_name);
+			if (!getservice(&services[nservices], path))
+				nservices++;
+		}
 	}
 
 	closedir(dp);
@@ -227,6 +239,9 @@ int main(int argc, char** argv) {
 			break;
 		case 'H':
 			home = EARGF(usage(1));
+			break;
+		case 'l':
+			scanlog = 1;
 			break;
 		case 's':
 			sortsys = 1;
