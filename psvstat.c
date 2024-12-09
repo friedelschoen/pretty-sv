@@ -11,8 +11,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAXSERVICES 100
 
+#define SERVICES_GROW  5
+#define TAI_DIFFERENCE 4611686018427387914ULL
 
 struct serviceserial {
 	uint8_t status_change[8];
@@ -30,38 +31,51 @@ struct serviceinfo {
 	struct serviceserial serial;
 };
 
+static struct serviceinfo* services = NULL;
 
-static const char*        home = NULL;
-static struct serviceinfo services[MAXSERVICES];
-static int                nservices = 0;
-static int                sortuser = 0, sortsys = 0, scanlog = 0;
+static const char* home      = NULL;
+static int         nservices = 0, maxservices = 0;
+static int         sortuser = 0, sortsys = 0, scanlog = 0;
 
-static int getservice(struct serviceinfo* info, const char* service) {
-	char        path[PATH_MAX];
-	FILE*       fp;
-	const char* name;
+static void addservice(const char* service) {
+	char                path[PATH_MAX];
+	FILE*               fp;
+	const char*         name;
+	struct serviceinfo* info;
+
+	if (nservices >= maxservices) {
+		maxservices += SERVICES_GROW;
+		if (!(services = realloc(services, maxservices * sizeof(*services)))) {
+			fprintf(stderr, "error: unable to allocate services\n");
+			exit(1);
+		}
+	}
+
+	info = &services[nservices];
 
 	/* read status */
 	snprintf(path, sizeof path, "%s/supervise/status", service);
 	if (!(fp = fopen(path, "r"))) {
 		if (errno != ENOENT && errno != EISDIR)
 			fprintf(stderr, "%s: unable to open status-file: %s\n", service, strerror(errno));
-		return -1;
+		return;
 	}
 	if (fread(&info->serial, sizeof(info->serial), 1, fp) != 1) {
 		fprintf(stderr, "%s: unable to read status-file: %s\n", service, strerror(ferror(fp)));
-		return -1;
+		fclose(fp);
+		return;
 	}
 	fclose(fp);
 
-	/* isuser */
+	/* is user service? */
 	if (!realpath(service, path)) {
 		fprintf(stderr, "%s: unable to get absolute path of: %s\n", service, strerror(errno));
-		return -1;
+		return;
 	}
 
 	info->isuser = home != NULL && !strncmp(path, home, strlen(home));
 
+	/* set name */
 	if ((name = strrchr(service, '/'))) {
 		if (!strcmp(name, "/log")) {
 			while (--name > service) {
@@ -73,8 +87,12 @@ static int getservice(struct serviceinfo* info, const char* service) {
 	} else
 		name = service;
 
-	info->name = strdup(name);
-	return 0;
+	if (!(info->name = strdup(name))) {
+		fprintf(stderr, "error: unable to allocate name\n");
+		exit(1);
+	}
+
+	nservices++;
 }
 
 static void printstatus(struct serviceinfo* service) {
@@ -119,7 +137,7 @@ static void printstatus(struct serviceinfo* service) {
 	               ((uint64_t) service->serial.status_change[6] << 8) |
 	               ((uint64_t) service->serial.status_change[7] << 0);
 
-	time_t      timediff  = time(NULL) - tai + 4611686018427387914ULL;
+	time_t      timediff  = time(NULL) - tai + TAI_DIFFERENCE;
 	const char* timediffu = timediff == 1 ? "second" : "seconds";
 	if (timediff >= 60) {
 		timediff /= 60;
@@ -177,13 +195,11 @@ static int scanservices(const char* base) {
 	DIR*           dp;
 	struct dirent* ep;
 
-	if (!getservice(&services[nservices], base))
-		nservices++;
+	addservice(base);
 
 	if (scanlog) {
 		snprintf(path, sizeof(path), "%s/log", base);
-		if (!getservice(&services[nservices], path))
-			nservices++;
+		addservice(path);
 	}
 
 	if (!(dp = opendir(base))) {
@@ -196,13 +212,11 @@ static int scanservices(const char* base) {
 			continue;
 
 		snprintf(path, sizeof(path), "%s/%s", base, ep->d_name);
-		if (!getservice(&services[nservices], path))
-			nservices++;
+		addservice(path);
 
 		if (scanlog) {
 			snprintf(path, sizeof(path), "%s/%s/log", base, ep->d_name);
-			if (!getservice(&services[nservices], path))
-				nservices++;
+			addservice(path);
 		}
 	}
 
@@ -223,15 +237,11 @@ static int servicecmp(const void* pleft, const void* pright) {
 }
 
 static __attribute__((noreturn)) void usage(int exitcode) {
-	fprintf(stderr, "usage: psvstat [-hsu] [-H home] [directories...]\n");
-
+	fprintf(stderr, "usage: psvstat [-hsul] [-H home] [directories...]\n");
 	exit(exitcode);
 }
 
 int main(int argc, char** argv) {
-	char  path[PATH_MAX];
-	FILE* fp;
-
 	ARGBEGIN
 	switch (OPT) {
 		case 'h':
@@ -258,7 +268,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (!home)
-		home = getenv("HOME"); /* fill global variable */
+		home = getenv("HOME");
 
 	for (int i = 0; i < argc; i++)
 		scanservices(argv[i]);
@@ -270,4 +280,7 @@ int main(int argc, char** argv) {
 
 	for (int i = 0; i < nservices; i++)
 		free(services[i].name);
+
+	free(services);
+	return 0;
 }
