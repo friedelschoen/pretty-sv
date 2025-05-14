@@ -1,91 +1,99 @@
-# psvstat - Pretty Service Status
+# psvstat – Pretty Service Status
 
-`psvstat` is a command-line utility for checking and printing the status of `runit` services. This tool reads the service status from the `supervise/status` file of each specified `runit` service and displays relevant information in a user-friendly format.
+`psvstat` is a small command-line utility that displays the status of [runit](http://smarden.org/runit/) services in a readable, concise format. It reads the binary `supervise/status` file of each given service directory and extracts details like current state, desired state, time since last change, PID, and command line.
 
 ## Features
 
-- Displays whether the service is a user service or a system service.
-- Shows the service name, desired state, and current state.
-- Indicates if the service is paused, down, running, or finished.
-- Provides the time elapsed since the last status change.
-- Displays the process ID and command name of the running service.
+- Distinguishes between user and system services
+- Displays:
+  - Service name
+  - Desired and actual state
+  - Paused state
+  - Time since last status change
+  - PID and command (if running)
+- Supports sorting system/user services first
+- Optionally includes log sub-services
+- Compact output, easy to parse visually or with tools
 
 ## Compilation
 
-To compile the program, run the following command:
+To build and install `psvstat`, run:
 
 ```sh
-$ make
-$ make PREFIX=$HOME/.local install
-```
+make
+make PREFIX=$HOME/.local install
+````
+
+This installs the binary into `$PREFIX/bin` and the man page into `$PREFIX/share/man`.
 
 ## Usage
 
-The `psvstat` program takes one or more arguments, each representing the path to a `runit` service directory. For example:
-
 ```sh
-psvstat /etc/service/service1 /etc/service/service2
+psvstat [options] [directories...]
 ```
 
-### Arguments
+Each argument should be a path to a `runit`-style service directory containing a `supervise/status` file.
 
-- **service_path**: The path to the `runit` service directory. The program expects the status file to be located at `service_path/supervise/status`.
+### Options
+
+| Option      | Description                                    |
+| ----------- | ---------------------------------------------- |
+| `-h`        | Show help and exit                             |
+| `-H <path>` | Set home path to determine user services       |
+| `-l`        | Include `log` subdirectories as services       |
+| `-s`        | Sort with system services first                |
+| `-u`        | Sort with user services first                  |
+| `-c <n>`    | Set max bytes to read from `/proc/PID/cmdline` |
+
+Note: `-s` and `-u` are mutually exclusive.
 
 ## Output
 
-The program prints the status of each specified service in a formatted manner. The output contains the following columns:
+Each service line contains:
 
-1. **Type**: Indicates if the service is a user service (`user`) or a system service (`sys`).
-2. **Name**: The name of the service.
-3. **Desired State**: Indicates if the service's desired state matches its current state.
-   - `=`: The service's desired state matches its current state.
-   - `v`: The service is up but should be down.
-   - `^`: The service is down but should be up.
-4. **Current State**: The current state of the service.
-   - `paus`: The service is paused.
-   - `down`: The service is down.
-   - `run`: The service is running.
-   - `fin`: The service has finished.
-   - `???`: Unknown state.
-5. **Time Since Last Change**: The time elapsed since the last status change.
-6. **PID**: The process ID of the service if it is running.
-7. **Command**: The command name of the running process if available.
+1. **Type**: `usr` for user, `sys` for system
+2. **Name**: basename of the service directory
+3. **Desired state**: one of:
 
-### Example Output
+   * `=` – desired and actual match
+   * `v` – wants down but is up
+   * `^` – wants up but is down
+4. **Current state**: one of:
+
+   * `run`, `down`, `fin` (finished), or `???` (unknown)
+5. **Paused**: shows `paus` if paused
+6. **Since**: time since last state change
+7. **PID**: if running
+8. **Command**: if available from `/proc/PID/cmdline`
+
+### Example
 
 ```sh
-sys   service1            = run   2 hours     1234   myservice
-sys   service2            ^ down  5 minutes   ---    ---
+sys   webserver            = run   2 hours     1234   nginx -g daemon off;
+usr   editor-service       ^ down  5 minutes   ---    ---
 ```
 
-In this example:
-- `service1` is a system service (`sys`), its desired state matches its current state (`=`), it is currently running (`run`), the status changed 2 hours ago, its PID is 1234, and the command name is `myservice`.
-- `service2` is a system service (`sys`), its desired state does not match its current state (`v`), it should be down but is up, the status changed 5 minutes ago, it is not running (`---`), and no command name is available (`---`).
+* `webserver` is a system service, currently running as expected.
+* `editor-service` is a user service that is down but should be running.
 
 ## Error Handling
 
-The program handles several error conditions and prints appropriate messages to `stderr`:
+Errors are reported to stderr, for example:
 
-- If it is unable to open the `supervise/status` file, it prints:
-  ```
-  <service_path>: unable to open supervise/status
-  ```
-- If it is unable to read the `supervise/status` file, it prints:
-  ```
-  <service_path>: unable to read status
-  ```
+```sh
+/etc/service/myapp: unable to open status-file: No such file or directory
+/home/user/svc/abc: unable to read status-file: Input/output error
+```
 
-## Environment Variables
+## Motivation
 
-- **HOME**: Used to determine if a service is a user service.
+I'm using [`stw`](https://github.com/sineemore/stw/) with `psvstat` to list my services. I'm using runit
+as my system service-supervisor ([Void Linux](https://voidlinux.org/)) and as user supervisor for my programs
+like my [dwm](http://dwm.suckless.org/) or applets.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request on GitHub.
+This project is licensed under the Zlib License. See the [LICENSE](LICENSE) file for details.
 
 ## Author
 
@@ -93,4 +101,4 @@ Written by Friedel Schon.
 
 ## Acknowledgments
 
-Thanks to the developers and community of `runit` for their excellent software and documentation.
+Thanks to the `runit` developers for their clean, simple design. This tool builds on the reliability of that foundation.

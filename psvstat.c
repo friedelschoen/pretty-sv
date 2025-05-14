@@ -3,7 +3,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,9 +32,9 @@ struct serviceinfo {
 
 static struct serviceinfo* services = NULL;
 
-static const char* home      = NULL;
+static const char* home      = "/home";
 static int         nservices = 0, maxservices = 0;
-static int         sortuser = 0, sortsys = 0, scanlog = 0;
+static int         sortuser = 0, sortsys = 0, scanlog = 0, cmdlen = 64;
 
 static void addservice(const char* service) {
 	char                path[PATH_MAX];
@@ -73,7 +72,7 @@ static void addservice(const char* service) {
 		return;
 	}
 
-	info->isuser = home != NULL && !strncmp(path, home, strlen(home));
+	info->isuser = home != NULL && !strncmp(home, path, strlen(home));
 
 	/* set name */
 	if ((name = strrchr(service, '/'))) {
@@ -95,11 +94,47 @@ static void addservice(const char* service) {
 	nservices++;
 }
 
+static void printcmdline(int fd) {
+	char    cmdline[cmdlen + 1]; /* +1 null-terminator */
+	ssize_t nread = read(fd, cmdline, cmdlen);
+
+	if (nread <= 0) {
+		printf("---");
+		return;
+	}
+
+	cmdline[nread] = '\0';
+
+	/* replace \0 -> space */
+	for (ssize_t i = 0; i < nread; i++) {
+		if (cmdline[i] == '\0')
+			cmdline[i] = ' ';
+	}
+
+	/* if cropped, add nice suffix */
+	if (nread == cmdlen) {
+		const char suffix[] = "...";
+		int        found    = 0;
+		for (ssize_t i = cmdlen - sizeof(suffix); i > 1; i--) {
+			if (cmdline[i] == ' ' && cmdline[i - 1] != ' ') {
+				strcpy(&cmdline[i], suffix);
+				found = 1;
+				break;
+			}
+		}
+		if (!found) {
+			strcpy(&cmdline[cmdlen - sizeof(suffix)], suffix);
+		}
+	}
+
+	printf("%s", cmdline);
+}
+
 static void printstatus(struct serviceinfo* service) {
 	if (service->isuser)
-		printf("user  ");
+		printf("usr  ");
 	else
-		printf("sys   ");
+		printf("sys  ");
 
 	printf("%-20s ", service->name);
 
@@ -166,21 +201,11 @@ static void printstatus(struct serviceinfo* service) {
 
 		int  procfd;
 		char procpath[PATH_MAX];
-		char cmdline[1024];
-		int  nread;
-		snprintf(procpath, sizeof procpath, "/proc/%d/comm", pid);
+		snprintf(procpath, sizeof procpath, "/proc/%d/cmdline", pid);
 
 		if ((procfd = open(procpath, O_RDONLY)) != -1) {
-			nread = read(procfd, cmdline, sizeof cmdline);
-			if (nread < 0) nread = 0;
-			if (nread == sizeof cmdline) {
-				strcpy(&cmdline[sizeof cmdline - 4], "...");
-			} else {
-				nread--;
-				cmdline[nread] = '\0';
-			}
+			printcmdline(procfd);
 			close(procfd);
-			printf("%s", cmdline);
 		} else {
 			printf("---");
 		}
@@ -259,6 +284,9 @@ int main(int argc, char** argv) {
 		case 'u':
 			sortuser = 1;
 			break;
+		case 'c':
+			cmdlen = atoi(EARGF(usage(1)));
+			break;
 	}
 	ARGEND
 
@@ -267,19 +295,15 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
-	if (!home)
-		home = getenv("HOME");
-
 	for (int i = 0; i < argc; i++)
 		scanservices(argv[i]);
 
 	qsort(services, nservices, sizeof(*services), servicecmp);
 
-	for (int i = 0; i < nservices; i++)
+	for (int i = 0; i < nservices; i++) {
 		printstatus(&services[i]);
-
-	for (int i = 0; i < nservices; i++)
 		free(services[i].name);
+	}
 
 	free(services);
 	return 0;
